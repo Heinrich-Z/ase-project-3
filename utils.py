@@ -1,5 +1,3 @@
-from math import inf
-
 import numpy as np
 import pandas as pd
 import math
@@ -18,9 +16,11 @@ R_pc = 50
 R_pl = 100
 p = 0.25
 
-a = 600
-b = 200
-AR = a / b
+l = 600
+w = 200
+AR = l / w
+
+sigma_uc = 650
 
 
 def get_Q_matrix():
@@ -151,58 +151,51 @@ def puck_failure_analysis(sigma_1, sigma_2, tau_21):
 
     return RF_FF, mode, fE_IFF, theta_fp
 
-def panel_buckling(D, t, beta):
+def panel_buckling(D_mat, t, beta):
     # 1. Buckling for biaxial loading
     min_sigma_crit = math.inf
     m_val = 0
     n_val = 0
     for m in range(1, 11):
         for n in range(1, 11):
-            term1 = math.pi**2 / (t * b**2)
-            term2 = 1
-            term3 = D[0][0] * (m / AR)**4 + 2 * (D[0][1] + D[2][2]) * (m * n / AR)**2 + D[1][1] * n**4
+            term1 = math.pi**2 / (t * w**2)
+            term2 = 1 / ((m/AR)**2 + beta * n**2)
+            term3 = D_mat[0][0] * (m / AR)**4 + 2 * (D_mat[0][1] + D_mat[2][2]) * (m * n / AR)**2 + D_mat[1][1] * n**4
             sigma_cr = term1 * term2 * term3
             if min_sigma_crit > sigma_cr >= 0:
-                min_val = sigma_cr
+                min_sigma_crit = sigma_cr
                 m_val = m
                 n_val = n
 
     # 2. Buckling for shear loading
-    delta = math.sqrt(D[0][0] * D[1][1]) / (D[0][1] + 2 * D[2][2])
+    delta = math.sqrt(D_mat[0][0] * D_mat[1][1]) / (D_mat[0][1] + 2 * D_mat[2][2])
     if delta >= 1:
-        tau_cr = 4 / (t * b**2) * ((D[0][0] * D[1][1]**3)**0.25 * (8.12 + 5.05 / delta))
+        tau_crit = 4 / (t * w**2) * ((D_mat[0][0] * D_mat[1][1]**3)**0.25 * (8.12 + 5.05 / delta))
+    else: # delta < 1
+        tau_crit = 4 / (t * w**2) * (math.sqrt(D_mat[1][1] * (D_mat[0][1] + 2 * D_mat[2][2])) * (11.7 + 0.532 * delta + 0.938 * delta**2))
 
+    return min_sigma_crit, m_val, n_val, tau_crit
 
 def Iyy_beam(b, h):
     return b * h**3 / 12
 
-def slenderness(Iyy, area):
+def slenderness(Iyy, area, length, c):
     radius_of_gyration = np.sqrt(Iyy / area)
     print("Radius of Gyration:", radius_of_gyration)
     lamda = length * c / radius_of_gyration
     return lamda
 
-def crippling_stress(bi, ti, num_support, Ec, sigma_p, crip):
-    Ki = 0.41 if num_support == 'single' else 3.6
-    xi = bi / ti * np.sqrt(sigma_p/(Ki * Ec))
+def crippling_stress(bm, t, case):
+    if case == 'OEF': # one edge free (OEF)
+        sigma_crip = 1.63 * sigma_uc / (bm / t)**0.717
 
-    if xi > 1.633:
-        alpha = 0.69/(xi ** 0.75)
-    elif xi <= 1.633 and xi > 1.095:
-        alpha = 0.78/xi
-    elif xi <= 1.095 and xi >= 0.4:
-        alpha = 1.4 - 0.628 * xi
-    elif xi < 0.4:
-        # in this case the part does not cripple and sigma_crip = sigma_p
-        alpha = 1
-    else:
-        print("Error with xi calculation")
+    elif case == 'NOF': # no edge free (NOF)
+        sigma_crip = 11.0 * sigma_uc / (bm / t)**1.124
 
-    if not crip:
-        # if the part does not cripple, then sigma_crip = sigma_p
-        alpha = 1
+    else: # segment does not cripple
+        sigma_crip = sigma_uc
 
-    return alpha * sigma_p
+    return sigma_crip
 
 def Euler_Johnson(sigma_p, sigma_crip, lamda):
     sigma_cutoff = min(sigma_p, sigma_crip)
@@ -217,50 +210,77 @@ def Euler_Johnson(sigma_p, sigma_crip, lamda):
 
     return sigma_ej
 
-def t_stringer_Iyy(left_pitch, right_pitch, left_skin_t, right_skin_t,
-                   web_width, web_height, flange_width, flange_t):
+def t_stringer_buck_analysis(pitch, skin_t, web_t, web_height, flange_width, flange_t, *args):
+    # use mid-line value for computing EIy and Iyy
+    # args: ABD_inv_flange, ABD_inv_web, ABD_inv_skin
+    # sequence: flange, web, left_skin, right_skin
+    # 1. Second moment of area
+    bm_flange = flange_width
+    hm_web = web_height - flange_t / 2
+    half_pitch = pitch / 2
 
-    # T-stringer second moment of area calculation
-    zi_left_skin = -left_skin_t / 2
-    zi_right_skin = -right_skin_t / 2
+    zi_left_skin = -skin_t / 2
+    zi_right_skin = -skin_t / 2
     zi_flange = flange_t / 2
-    zi_web = (web_height + flange_t) / 2
+    zi_web = flange_t / 2 + hm_web / 2
 
-    area_left_skin = left_pitch * left_skin_t
-    area_right_skin = right_pitch * right_skin_t
-    area_flange = flange_width * flange_t
-    area_web = web_width * (web_height - flange_t)
+    area_left_skin = skin_t * half_pitch
+    area_right_skin = skin_t * half_pitch
+    area_flange = bm_flange * flange_t
+    area_web = web_t * hm_web
 
-    zi_list = np.array([zi_left_skin, zi_right_skin, zi_flange, zi_web])
-    area_list = np.array([area_left_skin, area_right_skin, area_flange, area_web])
+    zi_list = np.array([zi_flange, zi_web, zi_left_skin, zi_right_skin])
+    area_list = np.array([area_flange, area_web, area_left_skin, area_right_skin])
     area = area_list.sum()
 
     z_ec = np.dot(zi_list, area_list) / area
     steiner = (zi_list - z_ec)**2 * area_list
-    Iyy = steiner.sum() + Iyy_beam(flange_width, flange_t) + Iyy_beam(web_width, (web_height - flange_t)) + Iyy_beam(left_pitch, left_skin_t) + Iyy_beam(right_pitch, right_skin_t)
+    sec_area = np.array([Iyy_beam(bm_flange, flange_t), Iyy_beam(web_t, hm_web), Iyy_beam(half_pitch, skin_t), Iyy_beam(half_pitch, skin_t)])
+    Iyy = steiner.sum() + sec_area.sum()
 
-    print("Skin Area: ", area_list[0:2].sum(), "\nStringer Area: ", area_list[2:].sum())
-    return Iyy, area, z_ec
+    # 2. Composite engineering constant
+    # skin: bending, constrained, flange: bending, constrained, web: axial, free
+    ABD_inv_flange = args[0]
+    E_flange_b = 12 / (ABD_inv_flange[3][3] * skin_t**3)
+    E_flange_x = 1 / (ABD_inv_flange[0][0] * skin_t)
+
+    ABD_inv_web = args[1]
+    E_web_b = 1 / (ABD_inv_web[0][0] * web_t)
+    E_web_x = 1 / (ABD_inv_web[0][0] * web_t)
+
+    ABD_inv_skin = args[2]
+    E_skin_b = 12 / (ABD_inv_skin[3][3] * skin_t**3)
+    E_skin_x = 1 / (ABD_inv_skin[0][0] * skin_t)
+
+    eng_const = {'flange': [E_flange_b, E_flange_x], 'web': [E_web_b, E_web_x], 'skin': [E_skin_x, E_skin_b]}
+    
+    # 3. Combined Bending stiffness
+    comb_stiff_flange = eng_const['flange'][0] * sec_area[0] + eng_const['flange'][1] * steiner[0]
+    comb_stiff_web = eng_const['web'][0] * sec_area[1] + eng_const['flange'][1] * steiner[1]
+    com_stiff_left_skin = eng_const['skin'][0] * sec_area[2] + eng_const['skin'][1] * steiner[2]
+    com_stiff_right_skin = eng_const['skin'][0] * sec_area[3] + eng_const['skin'][1] * steiner[3]
+    comb_stiff_list = np.array([comb_stiff_flange, comb_stiff_web, com_stiff_left_skin, com_stiff_right_skin])
+    comb_stiff = comb_stiff_list.sum()
+
+    return Iyy, area, z_ec, eng_const, comb_stiff
 
 def t_stringer_crip_analysis(flange_width, flange_t, web_width, web_height):
-    # T-stringer crippling analysis
-    a1_1 = flange_width / 2 # fixed
+    # ai_j represents the geometric value
+    a1_1 = flange_width / 2
     a1_2 = web_height
-
-    r = 0 # fixed
     t1 = flange_t
     t2 = web_width
 
-    b1_1 = a1_1 - t2/2 * (0.25 * t2/t1 - 0.2 * r**2/(t1*t2))
-    b1_2 = a1_2 - t1/2 * (2 - 0.5 * t2/t1 - 0.2 * r**2/(t1*t2))
+    # bi_j represents the mid-line value
+    b1_1 = a1_1
+    b1_2 = a1_2 + t1 / 2
 
-    sigma_crip_1 = crippling_stress(b1_1, t1, 'single', Ec, sigma_p, False)
-    sigma_crip_2 = crippling_stress(b1_2, t2, 'single', Ec, sigma_p, True)
+    sigma_crip_1 = crippling_stress(b1_1, t1, 'DNC') # flange (attached to skins)
+    sigma_crip_2 = crippling_stress(b1_2, t2, 'OEF') # web
 
-    F_crip = (2 * sigma_crip_1 * b1_1 * t1 + sigma_crip_2 * b1_2 * t2)
-    sigma_crip = min(F_crip / (2 * b1_1 * t1 + b1_2 * t2), sigma_p)
-
-    return sigma_crip
+    # to compute the combined crippling stress the geometric dimensions are used
+    sigma_crip_avg = (2 * sigma_crip_1 * a1_1 * t1 + sigma_crip_2 * a1_2 * t2) / (2 * a1_1 * t1 + a1_2 * t2)
+    return sigma_crip_avg
 
 def omega_stringer_Iyy(left_pitch, right_pitch, left_skin_t, right_skin_t,
                    t, top_flange_width, lower_flange_width, web_height):
@@ -291,23 +311,4 @@ def omega_stringer_Iyy(left_pitch, right_pitch, left_skin_t, right_skin_t,
 
 # Omega-stringer crippling analysis
 def omega_stringer_crip_analysis(t, top_flange_width, web_height, lower_flange_width):
-    r = 0 # fixed
-
-    a1 = top_flange_width + t # top flange
-    a2_1 = web_height # web
-    a2_2 = lower_flange_width # lower flange
-
-    b2_1 = a2_1 - t * (1 - 0.2 * r**2/(t * t))
-    b2_2 = a2_2 - t * (1 - 0.2 * r**2/(t * t))
-    b1 = a1 - t/2 * (1 - 0.2 * r**2/(t*t))
-
-    sigma_crip_2_1 = crippling_stress(b2_1, t, 'both', Ec, sigma_p, True)
-    sigma_crip_2_2 = crippling_stress(b2_2, t, 'both', Ec, sigma_p, True)
-    sigma_crip_1 = crippling_stress(b1, t, 'single', Ec, sigma_p, False)
-
-    area = 2 * b2_1 * t + b2_2 * t + 2 * b1 * t
-    F_crip = (2 * sigma_crip_2_1 * b2_1 * t + sigma_crip_2_2 * b2_2 * t + 2 * sigma_crip_1 * b1 * t)
-    sigma_crip = min(F_crip / (2 * b2_1 * t + b2_2 * t + 2 * b1 * t), sigma_p)
-
-    return sigma_crip
-
+    return
