@@ -6,7 +6,7 @@ import math
 E_11 = 126780.0 # TODO: check for 0.9 knockdown factor
 E_22 = 9678.0
 G_12 = 6213.6
-nu_12 = 0 # TODO: to be modified
+nu_12 = 0.32
 nu_21 = nu_12 * E_22 / E_11
 
 R_lt = 3050
@@ -80,10 +80,10 @@ def get_ABD_mat(ply_stack):
     B = np.zeros((3, 3))
     D = np.zeros((3, 3))
 
-    for ply in ply_stack:
-        Q_bar = ply['Q_bar']
-        z_k0 = ply['z_bottom']
-        z_k1 = ply['z_top']
+    for i in range(len(ply_stack['Q_bar'])):
+        Q_bar = ply_stack['Q_bar'][i]
+        z_k0 = ply_stack['z_k0'][i] # z_k
+        z_k1 = ply_stack['z_k1'][i] # z_k+1
 
         A += Q_bar * (z_k1 - z_k0)
         B += (1/2) * Q_bar * (z_k1**2 - z_k0**2)
@@ -239,17 +239,20 @@ def t_stringer_buck_analysis(pitch, skin_t, web_t, web_height, flange_width, fla
     Iyy = steiner.sum() + sec_area.sum()
 
     # 2. Composite engineering constant
-    # skin: bending, constrained, flange: bending, constrained, web: axial, free
-    ABD_inv_flange = args[0]
-    E_flange_b = 12 / (ABD_inv_flange[3][3] * skin_t**3)
-    E_flange_x = 1 / (ABD_inv_flange[0][0] * skin_t)
+    # skin: bending, constrained
+    ABD_flange = args[0]
+    E_flange_b = 12 * ABD_flange[3][3] / skin_t**3
+    E_flange_x = ABD_flange[0][0] / skin_t
 
-    ABD_inv_web = args[1]
-    E_web_b = 1 / (ABD_inv_web[0][0] * web_t)
-    E_web_x = 1 / (ABD_inv_web[0][0] * web_t)
+    # flange: bending, constrained
+    ABD_web = args[1]
+    E_web_b = 12 * ABD_web[3][3] / web_t
+    E_web_x = ABD_web[0][0] / web_t
 
-    ABD_inv_skin = args[2]
-    E_skin_b = 12 / (ABD_inv_skin[3][3] * skin_t**3)
+    # web: axial, free
+    ABD_skin = args[2]
+    ABD_inv_skin = np.linalg.inv(ABD_skin)
+    E_skin_b = 1 / (ABD_inv_skin[0][0] * skin_t)
     E_skin_x = 1 / (ABD_inv_skin[0][0] * skin_t)
 
     eng_const = {'flange': [E_flange_b, E_flange_x], 'web': [E_web_b, E_web_x], 'skin': [E_skin_x, E_skin_b]}
@@ -259,6 +262,7 @@ def t_stringer_buck_analysis(pitch, skin_t, web_t, web_height, flange_width, fla
     comb_stiff_web = eng_const['web'][0] * sec_area[1] + eng_const['flange'][1] * steiner[1]
     com_stiff_left_skin = eng_const['skin'][0] * sec_area[2] + eng_const['skin'][1] * steiner[2]
     com_stiff_right_skin = eng_const['skin'][0] * sec_area[3] + eng_const['skin'][1] * steiner[3]
+
     comb_stiff_list = np.array([comb_stiff_flange, comb_stiff_web, com_stiff_left_skin, com_stiff_right_skin])
     comb_stiff = comb_stiff_list.sum()
 
@@ -308,7 +312,3 @@ def omega_stringer_Iyy(left_pitch, right_pitch, left_skin_t, right_skin_t,
 
     print("Skin Area: ", area_list[0:2].sum(), "\nStringer Area: ", area_list[2:].sum())
     return Iyy, area, z_ec
-
-# Omega-stringer crippling analysis
-def omega_stringer_crip_analysis(t, top_flange_width, web_height, lower_flange_width):
-    return
