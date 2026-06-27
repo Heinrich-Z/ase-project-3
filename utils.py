@@ -1,9 +1,8 @@
 import numpy as np
-import pandas as pd
 import math
 
 # define material constant
-E_11 = 126780.0 # TODO: check for 0.9 knockdown factor
+E_11 = 126780.0  # TODO: check for 0.9 knockdown factor
 E_22 = 9678.0
 G_12 = 6213.6
 nu_12 = 0.32
@@ -18,11 +17,16 @@ p = 0.25
 
 l = 600
 w = 200
-AR = l / w
+AR = l / w  # aspect ratio alpha
 
 sigma_uc = 650
 
+# get the full stacking sequence
+def get_stack_seq(stack_seq_s):
+    stack_seq = stack_seq_s + stack_seq_s[::-1]
+    return stack_seq
 
+# get the unified Q matrix of this material
 def get_Q_matrix():
     Q_11 = E_11 / (1 - nu_12 * nu_21)
     Q_22 = E_22 / (1 - nu_12 * nu_21)
@@ -36,6 +40,7 @@ def get_Q_matrix():
     ])
     return Q_mat
 
+# get the strain transformation matrix for a ply
 def strain_transform_mat(theta):
     # transform strain from problem to material COS
     theta = np.radians(theta)
@@ -49,6 +54,7 @@ def strain_transform_mat(theta):
     ])
     return T_epsilon
 
+# get the stress transformation matrix for a ply
 def stress_transform_mat(theta):
     # transform stress from problem to material COS
     theta = np.radians(theta)
@@ -62,12 +68,14 @@ def stress_transform_mat(theta):
     ])
     return T_sigma
 
+# get the Q bar matrix
 def get_Q_bar_mat(Q, theta):
     T_sigma = stress_transform_mat(theta)
     T_epsilon = strain_transform_mat(theta)
     Q_bar = np.linalg.inv(T_sigma) @ Q @ T_epsilon
     return Q_bar
 
+# get the ABD matrix of a composite laminate
 def get_ABD_mat(ply_stack):
     """
     ply_stack: {
@@ -98,8 +106,9 @@ def get_ABD_mat(ply_stack):
         [B, D]
     ])
 
-    return ABD, A, B, D
+    return ABD
 
+# Puck failure mode analysis
 def puck_failure_analysis(sigma_1, sigma_2, tau_21):
     # 1. Fiber Fracture (FF)
     if sigma_1 > 0:
@@ -151,7 +160,8 @@ def puck_failure_analysis(sigma_1, sigma_2, tau_21):
 
     return RF_FF, mode, fE_IFF, theta_fp
 
-def panel_buckling(D_mat, t, beta):
+# -------- Buckling Analysis Package -------- #
+def panel_buckling(ABD_mat, t, beta):
     # 1. Buckling for biaxial loading
     min_sigma_crit = math.inf
     m_val = 0
@@ -160,7 +170,7 @@ def panel_buckling(D_mat, t, beta):
         for n in range(1, 11):
             term1 = math.pi**2 / (t * w**2)
             term2 = 1 / ((m/AR)**2 + beta * n**2)
-            term3 = D_mat[0][0] * (m / AR)**4 + 2 * (D_mat[0][1] + D_mat[2][2]) * (m * n / AR)**2 + D_mat[1][1] * n**4
+            term3 = ABD_mat[3][3] * (m / AR) ** 4 + 2 * (ABD_mat[3][4] + ABD_mat[5][5]) * (m * n / AR) ** 2 + ABD_mat[4][4] * n ** 4
             sigma_cr = term1 * term2 * term3
             if min_sigma_crit > sigma_cr >= 0:
                 min_sigma_crit = sigma_cr
@@ -168,11 +178,11 @@ def panel_buckling(D_mat, t, beta):
                 n_val = n
 
     # 2. Buckling for shear loading
-    delta = math.sqrt(D_mat[0][0] * D_mat[1][1]) / (D_mat[0][1] + 2 * D_mat[2][2])
+    delta = math.sqrt(ABD_mat[3][3] * ABD_mat[4][4]) / (ABD_mat[3][4] + 2 * ABD_mat[5][5])
     if delta >= 1:
-        tau_crit = 4 / (t * w**2) * ((D_mat[0][0] * D_mat[1][1]**3)**0.25 * (8.12 + 5.05 / delta))
+        tau_crit = 4 / (t * w**2) * ((ABD_mat[3][3] * ABD_mat[4][4] ** 3) ** 0.25 * (8.12 + 5.05 / delta))
     else: # delta < 1
-        tau_crit = 4 / (t * w**2) * (math.sqrt(D_mat[1][1] * (D_mat[0][1] + 2 * D_mat[2][2])) * (11.7 + 0.532 * delta + 0.938 * delta**2))
+        tau_crit = 4 / (t * w**2) * (math.sqrt(ABD_mat[4][4] * (ABD_mat[3][4] + 2 * ABD_mat[5][5])) * (11.7 + 0.532 * delta + 0.938 * delta ** 2))
 
     return min_sigma_crit, m_val, n_val, tau_crit
 
@@ -186,10 +196,10 @@ def slenderness(Iyy, area, length, c):
     return lamda
 
 def crippling_stress(bm, t, case):
-    if case == 'OEF': # one edge free (OEF)
+    if case == 'OEF':  # one edge free (OEF)
         sigma_crip = 1.63 * sigma_uc / (bm / t)**0.717
 
-    elif case == 'NOF': # no edge free (NOF)
+    elif case == 'NOF':  # no edge free (NOF)
         sigma_crip = 11.0 * sigma_uc / (bm / t)**1.124
 
     else: # segment does not cripple
@@ -197,33 +207,46 @@ def crippling_stress(bm, t, case):
 
     return sigma_crip
 
-def Euler_Johnson(sigma_p, sigma_crip, lamda):
-    sigma_cutoff = min(sigma_p, sigma_crip)
-    lamda_crit = np.sqrt(2 * Ec * np.pi**2 / sigma_cutoff)
+def Euler_Johnson(sigma_uc, sigma_crip, lamda, E_comb):
+    sigma_cutoff = float(min(sigma_uc, sigma_crip))
+    lamda_crit = np.sqrt(2 * E_comb * np.pi**2 / sigma_cutoff)
     print("lamda_crit: ", lamda_crit)
     if lamda < lamda_crit:
         # proceed with E-J
-        sigma_ej = sigma_cutoff - sigma_cutoff**2 * lamda**2 / (4 * np.pi**2 * Ec)
+        sigma_ej = sigma_cutoff - sigma_cutoff**2 * lamda**2 / (4 * np.pi**2 * E_comb)
     else:
         # proceed with Euler
-        sigma_ej = (np.pi ** 2 * Ec) / lamda**2
+        sigma_ej = (np.pi ** 2 * E_comb) / lamda**2
 
-    return sigma_ej
+    return sigma_cutoff, sigma_ej
 
-def t_stringer_buck_analysis(pitch, skin_t, web_t, web_height, flange_width, flange_t, *args):
-    # use mid-line value for computing EIy and Iyy
-    # args: ABD_inv_flange, ABD_inv_web, ABD_inv_skin
-    # sequence: flange, web, left_skin, right_skin
+def get_mid_line(*args):
+    """
+    :param args: [sec_name, ]
+    :return:
+    """
+    return
+
+def t_stringer_buckling_analysis(pitch, skin_t, web_t, web_height, flange_width, flange_t, *args):
+    """
+    pitch is the width of a panel element
+    use mid-line value for computing EIy and Iyy
+    args: ABD_flange, ABD_web, ABD_skin
+    variable sequence: flange, web, left_skin, right_skin
+    """
     # 1. Second moment of area
+    # compute the mid-line length
     bm_flange = flange_width
     hm_web = web_height - flange_t / 2
     half_pitch = pitch / 2
 
+    # compute the elastic center of each element
     zi_left_skin = -skin_t / 2
     zi_right_skin = -skin_t / 2
     zi_flange = flange_t / 2
     zi_web = flange_t / 2 + hm_web / 2
 
+    #
     area_left_skin = skin_t * half_pitch
     area_right_skin = skin_t * half_pitch
     area_flange = bm_flange * flange_t
@@ -286,9 +309,17 @@ def t_stringer_crip_analysis(flange_width, flange_t, web_width, web_height):
     sigma_crip_avg = (2 * sigma_crip_1 * a1_1 * t1 + sigma_crip_2 * a1_2 * t2) / (2 * a1_1 * t1 + a1_2 * t2)
     return sigma_crip_avg
 
-def omega_stringer_Iyy(left_pitch, right_pitch, left_skin_t, right_skin_t,
-                   t, top_flange_width, lower_flange_width, web_height):
-
+def omega_stringer_Iyy(pitch, skin_t, web_t, web_height, flange_width, flange_t, *args):
+    """
+    :param pitch:
+    :param skin_t:
+    :param web_t:
+    :param web_height:
+    :param flange_width:
+    :param flange_t:
+    :param args:
+    :return:
+    """
     # Omega-stringer second moment of area calculation
     zi_left_skin = -left_skin_t / 2
     zi_right_skin = -right_skin_t / 2
