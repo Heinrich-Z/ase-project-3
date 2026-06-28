@@ -21,11 +21,6 @@ AR = l / w  # aspect ratio alpha
 
 sigma_uc = 650
 
-# get the full stacking sequence
-def get_stack_seq(stack_seq_s):
-    stack_seq = stack_seq_s + stack_seq_s[::-1]
-    return stack_seq
-
 # get the unified Q matrix of this material
 def get_Q_matrix():
     Q_11 = E_11 / (1 - nu_12 * nu_21)
@@ -69,21 +64,27 @@ def stress_transform_mat(theta):
     return T_sigma
 
 # get the Q bar matrix
-def get_Q_bar_mat(Q, theta):
-    T_sigma = stress_transform_mat(theta)
-    T_epsilon = strain_transform_mat(theta)
-    Q_bar = np.linalg.inv(T_sigma) @ Q @ T_epsilon
-    return Q_bar
+def get_ply_stack(Q, stack_seq_s, ply_t):
+    stack_seq = stack_seq_s + stack_seq_s[::-1]
+    z_k0 = [i * ply_t for i in range(-len(stack_seq_s), len(stack_seq_s))]
+    z_k1 = [i * ply_t for i in range(-len(stack_seq_s) + 1, len(stack_seq_s) + 1)]
+
+    Q_bar_seq = []
+    for theta in stack_seq:
+        T_sigma = stress_transform_mat(theta)
+        T_epsilon = strain_transform_mat(theta)
+        Q_bar = np.linalg.inv(T_sigma) @ Q @ T_epsilon
+        Q_bar_seq.append(Q_bar)
+
+    ply_stack = {'Q_bar': Q_bar_seq, 'z_k0': z_k0, 'z_k1': z_k1}
+    return ply_stack
 
 # get the ABD matrix of a composite laminate
-def get_ABD_mat(ply_stack):
-    """
-    ply_stack: {
-        Q_bar_{k}: numpy matrix shape 3 x 3,
-        z_bottom: float
-        z_top: float
-    }
-    """
+def get_ABD_mat(Q, stack_seq_s, ply_t):
+
+    # ply_stack: {Q_bar_{k}: numpy matrix shape 3 x 3, z_bottom: float, z_top: float}
+    ply_stack = get_ply_stack(Q, stack_seq_s, ply_t)
+
     A = np.zeros((3, 3))
     B = np.zeros((3, 3))
     D = np.zeros((3, 3))
@@ -220,14 +221,39 @@ def Euler_Johnson(sigma_uc, sigma_crip, lamda, E_comb):
 
     return sigma_cutoff, sigma_ej
 
-def get_mid_line(*args):
+def get_mid_line(**kwargs):
     """
-    :param args: [sec_name, ]
-    :return:
+    :param kwargs: {sec_name: string, dim: list}
+    for T stringer:
+        0. flange width,
+        1. flange thickness,
+        2. web thickness,
+        3. web height
+    for Omega stringer:
+        0: upper flange width,
+        1: web height,
+        2: lower flange width,
+        3: thickness
+    :return: mid_dim: <list>
     """
-    return
+    sec_name = kwargs['sec_name']
 
-def t_stringer_buckling_analysis(pitch, skin_t, web_t, web_height, flange_width, flange_t, *args):
+    if sec_name == 'T':
+        flange_bm = kwargs['dim'][0]
+        flange_t = kwargs['dim'][1]
+        web_t = kwargs['dim'][2] / 2
+        web_hm = kwargs['dim'][3] - web_t / 2
+        mid_dim = [flange_bm, flange_t, web_t, web_hm]
+    else:
+        t_omega = kwargs['dim'][3]
+        up_flange_bm = kwargs['dim'][0] + t_omega / 2
+        web_hm = kwargs['dim'][1] - t_omega
+        low_flange_bm = kwargs['dim'][2] - t_omega
+        mid_dim = [t_omega, up_flange_bm, web_hm, low_flange_bm]
+
+    return mid_dim
+
+def t_stringer_buckling_analysis(half_pitch, skin_t, dim, *args):
     """
     pitch is the width of a panel element
     use mid-line value for computing EIy and Iyy
@@ -235,22 +261,24 @@ def t_stringer_buckling_analysis(pitch, skin_t, web_t, web_height, flange_width,
     variable sequence: flange, web, left_skin, right_skin
     """
     # 1. Second moment of area
-    # compute the mid-line length
-    bm_flange = flange_width
-    hm_web = web_height - flange_t / 2
-    half_pitch = pitch / 2
+    # get the mid-line length
+    mid_dim = get_mid_line(sec_name='T', dim=dim)
+    flange_bm = mid_dim[0]
+    flange_t = mid_dim[1]
+    web_t = mid_dim[2]
+    web_hm = mid_dim[3]
 
     # compute the elastic center of each element
     zi_left_skin = -skin_t / 2
     zi_right_skin = -skin_t / 2
     zi_flange = flange_t / 2
-    zi_web = flange_t / 2 + hm_web / 2
+    zi_web = flange_t / 2 + web_hm / 2
 
-    #
+    # compute the area of each element
     area_left_skin = skin_t * half_pitch
     area_right_skin = skin_t * half_pitch
-    area_flange = bm_flange * flange_t
-    area_web = web_t * hm_web
+    area_flange = flange_bm * flange_t
+    area_web = web_t * web_hm
 
     zi_list = np.array([zi_flange, zi_web, zi_left_skin, zi_right_skin])
     area_list = np.array([area_flange, area_web, area_left_skin, area_right_skin])
@@ -258,7 +286,7 @@ def t_stringer_buckling_analysis(pitch, skin_t, web_t, web_height, flange_width,
 
     z_ec = np.dot(zi_list, area_list) / area
     steiner = (zi_list - z_ec)**2 * area_list
-    sec_area = np.array([Iyy_beam(bm_flange, flange_t), Iyy_beam(web_t, hm_web), Iyy_beam(half_pitch, skin_t), Iyy_beam(half_pitch, skin_t)])
+    sec_area = np.array([Iyy_beam(flange_bm, flange_t), Iyy_beam(web_t, web_hm), Iyy_beam(half_pitch, skin_t), Iyy_beam(half_pitch, skin_t)])
     Iyy = steiner.sum() + sec_area.sum()
 
     # 2. Composite engineering constant
