@@ -268,16 +268,16 @@ def t_stringer_buckling_analysis(half_pitch, skin_t, dim, *args):
     web_hm = mid_dim[3]
 
     # compute the elastic center of each element
-    zi_left_skin = -skin_t / 2
-    zi_right_skin = -skin_t / 2
     zi_flange = flange_t / 2
     zi_web = flange_t / 2 + web_hm / 2
+    zi_left_skin = -skin_t / 2
+    zi_right_skin = -skin_t / 2
 
     # compute the area of each element
-    area_left_skin = skin_t * half_pitch
-    area_right_skin = skin_t * half_pitch
     area_flange = flange_bm * flange_t
     area_web = web_t * web_hm
+    area_left_skin = skin_t * half_pitch
+    area_right_skin = skin_t * half_pitch
 
     zi_list = np.array([zi_flange, zi_web, zi_left_skin, zi_right_skin])
     area_list = np.array([area_flange, area_web, area_left_skin, area_right_skin])
@@ -291,8 +291,8 @@ def t_stringer_buckling_analysis(half_pitch, skin_t, dim, *args):
     # 2. Composite engineering constant
     # flange: bending, constrained
     ABD_flange = args[0]
-    E_flange_b = 12 * ABD_flange[3][3] / skin_t**3
-    E_flange_x = ABD_flange[0][0] / skin_t
+    E_flange_b = 12 * ABD_flange[3][3] / flange_t**3
+    E_flange_x = ABD_flange[0][0] / flange_t
 
     # web: axial, free
     ABD_web = args[1]
@@ -300,12 +300,14 @@ def t_stringer_buckling_analysis(half_pitch, skin_t, dim, *args):
     E_web_b = 1 / (ABD_web_inv[0][0] * web_t)
     E_web_x = 1 / (ABD_web_inv[0][0] * web_t)
 
-    # web: bending, constrained
+    # skin: bending, constrained
     ABD_skin = args[2]
     E_skin_b = 12 * ABD_skin[3][3] / skin_t**3
     E_skin_x = ABD_skin[0][0] * skin_t
 
-    eng_const = {'flange': [E_flange_b, E_flange_x], 'web': [E_web_b, E_web_x], 'skin': [E_skin_x, E_skin_b]}
+    eng_const = {'flange': [E_flange_b, E_flange_x],
+                 'web': [E_web_b, E_web_x],
+                 'skin': [E_skin_b, E_skin_x]}
     
     # 3. Combined Bending stiffness
     comb_stiff_flange = eng_const['flange'][0] * sec_area[0] + eng_const['flange'][1] * steiner[0]
@@ -351,60 +353,67 @@ def omega_stringer_Iyy(half_pitch, skin_t, dim, *args):
     t_omega = mid_dim[3]
 
     # compute the elastic center of each element
-    zi_left_skin = -skin_t / 2
-    zi_right_skin = -skin_t / 2
     zi_top_flange = t_omega / 2
     zi_web = t_omega / 2 + web_hm / 2
-    zi_lower_flange = t_omega / 2 + web_hm
+    zi_low_flange = t_omega / 2 + web_hm
+    zi_left_skin = -skin_t / 2
+    zi_right_skin = -skin_t / 2
 
     # compute the area of each element
-    area_left_skin = skin_t * half_pitch
-    area_right_skin = skin_t * half_pitch
     area_up_flange = 2 * up_flange_bm * t_omega
     area_web = 2 * web_hm * t_omega
     area_low_flange = low_flange_bm * t_omega
+    area_left_skin = skin_t * half_pitch
+    area_right_skin = skin_t * half_pitch
 
-    zi_list = np.array([zi_top_flange, zi_web, zi_lower_flange, zi_left_skin, zi_right_skin])
+    zi_list = np.array([zi_top_flange, zi_web, zi_low_flange, zi_left_skin, zi_right_skin])
     area_list = np.array([area_up_flange, area_web, area_low_flange, area_left_skin, area_right_skin])
     area = area_list.sum()
 
     z_ec = np.dot(zi_list, area_list) / area
     steiner = (zi_list - z_ec)**2 * area_list
     sec_area = np.array([
-        Iyy_beam(up_flange_bm, t_omega),
+        2 * Iyy_beam(up_flange_bm, t_omega),
         2 * Iyy_beam(web_hm, t_omega),
-        2 * Iyy_beam(low_flange_bm, t_omega),
+        Iyy_beam(low_flange_bm, t_omega),
         Iyy_beam(half_pitch, skin_t),
         Iyy_beam(half_pitch, skin_t)
     ])
     Iyy = steiner.sum() + sec_area.sum()
 
     # 2. Composite engineering constant
-    # skin: bending, constrained
-    ABD_flange = args[0]
-    E_flange_b = 12 * ABD_flange[3][3] / skin_t**3
-    E_flange_x = ABD_flange[0][0] / skin_t
+    ABD_omega = args[0]
+    ABD_omega_inv = np.linalg.inv(ABD_omega)
+
+    # upper flange: bending, constrained
+    E_up_flange_b = 12 * ABD_omega[3][3] / skin_t**3
+    E_up_flange_x = ABD_omega[0][0] / skin_t
 
     # web: axial, free
-    ABD_web = args[1]
-    ABD_web_inv = np.linalg.inv(ABD_web)
-    E_web_b = 1 / (ABD_web_inv[0][0] * web_t)
-    E_web_x = 1 / (ABD_web_inv[0][0] * web_t)
+    E_web_b = 1 / (ABD_omega_inv[0][0] * t_omega)
+    E_web_x = 1 / (ABD_omega_inv[0][0] * t_omega)
 
-    # web: bending, constrained
-    ABD_skin = args[2]
-    E_skin_b = 12 * ABD_skin[3][3] / skin_t**3
-    E_skin_x = ABD_skin[0][0] * skin_t
+    # lower flange: bending, free
+    E_low_flange_b = 12 / (ABD_omega_inv[3][3] * t_omega**3)
+    E_low_flange_x = 1 / (ABD_omega_inv[0][0] * t_omega)
 
-    eng_const = {'flange': [E_flange_b, E_flange_x], 'web': [E_web_b, E_web_x], 'skin': [E_skin_x, E_skin_b]}
+    # skin: bending, constrained
+    E_skin_b = 12 * ABD_omega[3][3] / skin_t**3
+    E_skin_x = ABD_omega[0][0] * skin_t
+
+    eng_const = {'up_flange': [E_up_flange_b, E_up_flange_x],
+                 'web': [E_web_b, E_web_x],
+                 'low_flange': [E_low_flange_b, E_low_flange_x],
+                 'skin': [E_skin_b, E_skin_x]}
 
     # 3. Combined Bending stiffness
-    comb_stiff_flange = eng_const['flange'][0] * sec_area[0] + eng_const['flange'][1] * steiner[0]
+    comb_stiff_up_flange = eng_const['up_flange'][0] * sec_area[0] + eng_const['up_flange'][1] * steiner[0]
     comb_stiff_web = eng_const['web'][0] * sec_area[1] + eng_const['flange'][1] * steiner[1]
-    com_stiff_left_skin = eng_const['skin'][0] * sec_area[2] + eng_const['skin'][1] * steiner[2]
-    com_stiff_right_skin = eng_const['skin'][0] * sec_area[3] + eng_const['skin'][1] * steiner[3]
+    comb_stiff_low_flange = eng_const['low_flange'][0] * sec_area[2] + eng_const['low_flange'][1] * sec_area
+    com_stiff_left_skin = eng_const['skin'][0] * sec_area[3] + eng_const['skin'][1] * steiner[3]
+    com_stiff_right_skin = eng_const['skin'][0] * sec_area[4] + eng_const['skin'][1] * steiner[4]
 
-    comb_stiff_list = np.array([comb_stiff_flange, comb_stiff_web, com_stiff_left_skin, com_stiff_right_skin])
+    comb_stiff_list = np.array([comb_stiff_up_flange, comb_stiff_web, comb_stiff_low_flange, com_stiff_left_skin, com_stiff_right_skin])
     comb_stiff = comb_stiff_list.sum()
 
     return Iyy, area, z_ec, eng_const, comb_stiff
