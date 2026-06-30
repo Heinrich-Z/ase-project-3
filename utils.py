@@ -200,7 +200,7 @@ def crippling_stress(bm, t, case):
     if case == 'OEF':  # one edge free (OEF)
         sigma_crip = 1.63 * sigma_uc / (bm / t)**0.717
 
-    elif case == 'NOF':  # no edge free (NOF)
+    elif case == 'NEF':  # no edge free (NEF)
         sigma_crip = 11.0 * sigma_uc / (bm / t)**1.124
 
     else: # segment does not cripple
@@ -208,7 +208,7 @@ def crippling_stress(bm, t, case):
 
     return sigma_crip
 
-def Euler_Johnson(sigma_uc, sigma_crip, lamda, E_comb):
+def Euler_Johnson(sigma_crip, lamda, E_comb):
     sigma_cutoff = float(min(sigma_uc, sigma_crip))
     lamda_crit = np.sqrt(2 * E_comb * np.pi**2 / sigma_cutoff)
     print("lamda_crit: ", lamda_crit)
@@ -232,7 +232,7 @@ def get_mid_line(**kwargs):
     for Omega stringer:
         0: upper flange width,
         1: web height,
-        2: lower flange width,
+        2: bottom flange width,
         3: thickness
     :return: mid_dim: <list>
     """
@@ -241,7 +241,7 @@ def get_mid_line(**kwargs):
     if sec_name == 'T':
         flange_bm = kwargs['dim'][0]
         flange_t = kwargs['dim'][1]
-        web_t = kwargs['dim'][2] / 2
+        web_t = kwargs['dim'][2]
         web_hm = kwargs['dim'][3] + web_t / 2
         mid_dim = [flange_bm, flange_t, web_t, web_hm]
     else:
@@ -320,22 +320,19 @@ def t_stringer_buckling_analysis(half_pitch, skin_t, dim, *args):
 
     return Iyy, area, z_ec, eng_const, comb_stiff
 
-def t_stringer_crip_analysis(flange_width, flange_t, web_width, web_height):
-    # ai_j represents the geometric value
-    a1_1 = flange_width / 2
-    a1_2 = web_height
-    t1 = flange_t
-    t2 = web_width
+def t_stringer_crip_analysis(dim):
+    # get the mid-line value
+    mid_dim = get_mid_line(sec_name='T', dim=dim)
+    t_1 = mid_dim[1] # flange thickness
+    t_2 = mid_dim[2] # web thickness
+    b1 = mid_dim[0] / 2 # half of the flange width
+    b2 = mid_dim[3]
 
-    # bi_j represents the mid-line value
-    b1_1 = a1_1
-    b1_2 = a1_2 + t1 / 2
-
-    sigma_crip_1 = crippling_stress(b1_1, t1, 'DNC') # flange (attached to skins)
-    sigma_crip_2 = crippling_stress(b1_2, t2, 'OEF') # web
+    sigma_crip_1 = crippling_stress(b1, t_1, 'DNC') # flange (attached to skins)
+    sigma_crip_2 = crippling_stress(b2, t_2, 'OEF') # web
 
     # to compute the combined crippling stress the geometric dimensions are used
-    sigma_crip_avg = (2 * sigma_crip_1 * a1_1 * t1 + sigma_crip_2 * a1_2 * t2) / (2 * a1_1 * t1 + a1_2 * t2)
+    sigma_crip_avg = (2 * sigma_crip_1 * b1 * t_1 + sigma_crip_2 * b2 * t_2) / (2 * b1 * t_1 + b2 * t_2)
     return sigma_crip_avg
 
 def omega_stringer_Iyy(half_pitch, skin_t, dim, *args):
@@ -418,6 +415,19 @@ def omega_stringer_Iyy(half_pitch, skin_t, dim, *args):
 
     return Iyy, area, z_ec, eng_const, comb_stiff
 
+def omega_stringer_crip_analysis(dim):
+    # get the mid-line value
+    mid_dim = get_mid_line(sec_name='Omega', dim=dim)
+    t = mid_dim[3]  # section thickness
+    b1 = mid_dim[0] # upper flange
+    b2 = mid_dim[1] # web
+    b3 = mid_dim[3] # bottom flange
 
+    sigma_crip_1 = crippling_stress(b1, t, 'DNC')  # upper flange (attached to skins)
+    sigma_crip_2 = crippling_stress(b2, t, 'NEF')  # web
+    sigma_crip_3 = crippling_stress(b3, t, 'NEF') # bottom flange
 
+    # to compute the combined crippling stress the geometric dimensions are used
+    sigma_crip_avg = (2 * sigma_crip_1 * b1 * t + 2 * sigma_crip_2 * b2 * t + sigma_crip_3 * b3 * t) / (2 * b1 * t + 2 * b2 * t + b3 * t)
+    return sigma_crip_avg
 
